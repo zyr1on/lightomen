@@ -19,10 +19,11 @@ use lightomen_common::{
     DaemonStatus, IpcMessage, ALT_SOCKET_PATH, CMD_CANCEL_KEY_LEARN, CMD_GET_STATUS,
     CMD_SET_AUTOSTART, CMD_SET_CPU_BOOST, CMD_SET_ECO_ON_BATTERY, CMD_SET_FAN_CURVES,
     CMD_SET_FAN_MODE, CMD_SET_GPU_ZERO_RPM, CMD_SET_LOW_HZ_ON_BATTERY, CMD_SET_MUX_MODE,
-    CMD_SET_NO_BOOST_ON_BATTERY, CMD_SET_POWER_PROFILE, CMD_SET_PROBE_INTERVAL,
+    CMD_SET_CHARGE_LIMIT, CMD_SET_NO_BOOST_ON_BATTERY, CMD_SET_POWER_PROFILE, CMD_SET_PROBE_INTERVAL,
     CMD_START_KEY_LEARN, CURVE_TEMPS, DEFAULT_CPU_CURVE, DEFAULT_GPU_CURVE, FAN_MODE_AUTO,
     FAN_MODE_CURVE, FAN_MODE_MAX, MUX_MODE_DISCRETE, MUX_MODE_HYBRID, POWER_PROFILE_BALANCED,
     POWER_PROFILE_ECO, POWER_PROFILE_PERFORMANCE, SOCKET_PATH,
+    CHARGE_LIMIT_MAX, CHARGE_LIMIT_MIN, CHARGE_LIMIT_STEP,
 };
 use std::fs;
 use std::io::{Read, Write};
@@ -288,6 +289,53 @@ impl LightOmenApp {
         } else {
             None
         }
+    }
+
+    fn draw_charge_limit_card(&mut self, ui: &mut Ui) {
+        let tr = self.language.is_tr();
+        egui::Frame::none()
+            .fill(CARD_BG)
+            .stroke(Stroke::new(1.0, LINE_BORDER))
+            .rounding(Rounding::same(8.0))
+            .inner_margin(14.0)
+            .show(ui, |ui| {
+                let current = self.status.config.charge_limit();
+                ui.horizontal(|ui| {
+                    ui.vertical(|ui| {
+                        let title = if tr { "Şarj Sınırı" } else { "Battery Charge Limit" };
+                        let desc = if tr {
+                            "Pil ömrünü uzatmak için şarjı belirlenen yüzdede durdurur (%50-100)."
+                        } else {
+                            "Stop charging at the chosen level to extend battery lifespan (50-100%)."
+                        };
+                        ui.label(egui::RichText::new(title).font(FontId::new(13.0, FontFamily::Proportional)).color(TEXT_PRIMARY));
+                        ui.label(egui::RichText::new(desc).font(FontId::new(11.0, FontFamily::Proportional)).color(TEXT_MUTED));
+                    });
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let mut enabled = current.is_some();
+                        if ui.checkbox(&mut enabled, "").changed() {
+                            let limit = if enabled { Some(80) } else { None };
+                            self.status.config.set_charge_limit(limit);
+                            Self::send_ipc(CMD_SET_CHARGE_LIMIT, &[limit.unwrap_or(0)]);
+                        }
+                    });
+                });
+                if let Some(pct) = current {
+                    ui.add_space(6.0);
+                    let mut val = pct;
+                    let resp = ui.add(
+                        egui::Slider::new(&mut val, CHARGE_LIMIT_MIN..=CHARGE_LIMIT_MAX)
+                            .step_by(CHARGE_LIMIT_STEP as f64)
+                            .suffix("%"),
+                    );
+                    // Only 11 discrete steps, so sending on every change is cheap and
+                    // keeps the daemon in sync with the periodic status poll.
+                    if resp.changed() {
+                        self.status.config.set_charge_limit(Some(val));
+                        Self::send_ipc(CMD_SET_CHARGE_LIMIT, &[val]);
+                    }
+                }
+            });
     }
 
     fn send_ipc(cmd: u8, data: &[u8]) {
@@ -2011,6 +2059,12 @@ impl LightOmenApp {
                     });
 
                 ui.add_space(8.0);
+
+                // Battery charge limit (only when the kernel exposes charge_control_end_threshold)
+                if self.status.charge_limit_supported != 0 {
+                    self.draw_charge_limit_card(ui);
+                    ui.add_space(8.0);
+                }
 
                 // 3. FACTORY RESET
                 egui::Frame::none()

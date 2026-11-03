@@ -7,7 +7,8 @@ use lightomen_common::{
     CMD_SET_AUTOSTART, CMD_SET_CPU_BOOST, CMD_SET_ECO_ON_BATTERY, CMD_SET_FAN_CURVES,
     CMD_SET_FAN_MODE, CMD_SET_GPU_ZERO_RPM, CMD_SET_HOTKEY, CMD_SET_LOW_HZ_ON_BATTERY,
     CMD_SET_MUX_MODE, CMD_SET_NO_BOOST_ON_BATTERY, CMD_SET_POWER_PROFILE, CMD_SET_PROBE_INTERVAL,
-    CMD_SPAWN_GUI, CMD_START_KEY_LEARN, CMD_TOGGLE_GUI, CONFIG_FILE, SOCKET_PATH,
+    CMD_SET_CHARGE_LIMIT, CMD_SPAWN_GUI, CMD_START_KEY_LEARN, CMD_TOGGLE_GUI, CONFIG_FILE, SOCKET_PATH,
+    validate_charge_limit,
 };
 use std::fs;
 use std::io::{Read, Write};
@@ -157,6 +158,18 @@ impl IpcServer {
                 let no_boost = msg.data[0];
                 let mut st = status.lock().unwrap();
                 st.config.set_no_boost_on_battery(no_boost != 0);
+                let _ = st.config.save_to_file(CONFIG_FILE);
+                let _ = stream.write_all(b"OK");
+            }
+            CMD_SET_CHARGE_LIMIT => {
+                let pct = msg.data[0];
+                let limit = validate_charge_limit(pct);
+                if pct != 0 && limit.is_none() {
+                    let _ = stream.write_all(b"ERR");
+                    return;
+                }
+                let mut st = status.lock().unwrap();
+                st.config.set_charge_limit(limit);
                 let _ = st.config.save_to_file(CONFIG_FILE);
                 let _ = stream.write_all(b"OK");
             }

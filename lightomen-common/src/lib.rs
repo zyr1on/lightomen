@@ -27,6 +27,12 @@ pub const FAN_MODE_CURVE: u8 = 2;
 pub const MUX_MODE_HYBRID: u8 = 0;
 pub const MUX_MODE_DISCRETE: u8 = 1;
 
+/// Battery charge limit range in percent. Stored in 5% steps so it fits in the
+/// upper nibble of `battery_flags` without changing the config layout.
+pub const CHARGE_LIMIT_MIN: u8 = 50;
+pub const CHARGE_LIMIT_MAX: u8 = 100;
+pub const CHARGE_LIMIT_STEP: u8 = 5;
+
 pub const CONFIG_MAGIC: u32 = 0x4C4F4D4E; // "LOMN"
 pub const CONFIG_MAGIC_LEGACY: u32 = 0x4F484D41; // "OHMA"
 pub const CONFIG_VERSION: u32 = 1;
@@ -151,6 +157,26 @@ impl DaemonConfig {
             self.battery_flags &= !8;
         }
     }
+
+    /// Configured charge limit in percent, or `None` when the limit is not managed.
+    /// Encoded in bits 4..7 of `battery_flags`: 0 = off, n = 50 + (n - 1) * 5.
+    pub fn charge_limit(&self) -> Option<u8> {
+        match self.battery_flags >> 4 {
+            0 => None,
+            n => validate_charge_limit(CHARGE_LIMIT_MIN + (n - 1) * CHARGE_LIMIT_STEP),
+        }
+    }
+
+    /// Set the charge limit. `None` (or an out-of-range value) disables it.
+    /// In-range values are rounded down to the nearest 5%.
+    pub fn set_charge_limit(&mut self, pct: Option<u8>) {
+        let nibble = match pct.and_then(validate_charge_limit) {
+            Some(v) => (v - CHARGE_LIMIT_MIN) / CHARGE_LIMIT_STEP + 1,
+            None => 0,
+        };
+        self.battery_flags = (self.battery_flags & 0x0F) | (nibble << 4);
+    }
+
     pub fn as_bytes(&self) -> &[u8] {
         unsafe {
             std::slice::from_raw_parts(
@@ -208,6 +234,16 @@ impl DaemonConfig {
     }
 }
 
+/// Validate a charge limit percentage. Returns the value rounded down to a
+/// 5% step, or `None` if it is outside `CHARGE_LIMIT_MIN..=CHARGE_LIMIT_MAX`.
+pub fn validate_charge_limit(pct: u8) -> Option<u8> {
+    if (CHARGE_LIMIT_MIN..=CHARGE_LIMIT_MAX).contains(&pct) {
+        Some(pct - (pct - CHARGE_LIMIT_MIN) % CHARGE_LIMIT_STEP)
+    } else {
+        None
+    }
+}
+
 /// Full daemon status returned to GUI via IPC (64 bytes)
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -218,7 +254,8 @@ pub struct DaemonStatus {
     pub on_battery: u8,           // 1 byte: 1 if running on battery, 0 if AC
     pub last_learned_key: u16,    // 2 bytes: keycode captured
     pub battery_pct: u8,          // 1 byte: 0..100%
-    pub _pad1: [u8; 3],           // 3 bytes: alignment to 64 bytes
+    pub charge_limit_supported: u8, // 1 byte: 1 if charge_control_end_threshold exists
+    pub _pad1: [u8; 2],           // 2 bytes: alignment to 64 bytes
 }
 
 impl Default for DaemonStatus {
@@ -230,7 +267,8 @@ impl Default for DaemonStatus {
             on_battery: 0,
             last_learned_key: 149,
             battery_pct: 100,
-            _pad1: [0; 3],
+            charge_limit_supported: 0,
+            _pad1: [0; 2],
         }
     }
 }
@@ -270,6 +308,8 @@ pub const CMD_SET_ECO_ON_BATTERY: u8 = 14;
 pub const CMD_SET_LOW_HZ_ON_BATTERY: u8 = 15;
 pub const CMD_SET_CPU_BOOST: u8 = 16;
 pub const CMD_SET_NO_BOOST_ON_BATTERY: u8 = 17;
+/// data[0] = charge limit percent (50..=100), 0 = disable
+pub const CMD_SET_CHARGE_LIMIT: u8 = 18;
 
 /// IPC Message Header & Payload (exactly 68 bytes)
 #[repr(C)]
@@ -341,5 +381,41 @@ mod tests {
         let bytes = status.as_bytes();
         let restored = DaemonStatus::from_bytes(bytes).expect("valid status");
         assert_eq!(status, restored);
+    }
+
+    #[test]
+    fn test_validate_charge_limit() {
+        assert_eq!(validate_charge_limit(49), None);
+        assert_eq!(validate_charge_limit(101), None);
+        assert_eq!(validate_charge_limit(0), None);
+        assert_eq!(validate_charge_limit(50), Some(50));
+        assert_eq!(validate_charge_limit(80), Some(80));
+        assert_eq!(validate_charge_limit(84), Some(80));
+        assert_eq!(validate_charge_limit(100), Some(100));
+    }
+
+    #[test]
+    fn test_charge_limit_roundtrip_keeps_other_flags() {
+        let mut cfg = DaemonConfig::default();
+        assert_eq!(cfg.charge_limit(), None);
+        let low_bits = cfg.battery_flags & 0x0F;
+        for pct in (50..=100).step_by(5) {
+            cfg.set_charge_limit(Some(pct));
+            assert_eq!(cfg.charge_limit(), Some(pct));
+            assert_eq!(cfg.battery_flags & 0x0F, low_bits);
+        }
+        cfg.set_charge_limit(Some(30));
+        assert_eq!(cfg.charge_limit(), None);
+        cfg.set_charge_limit(Some(80));
+        cfg.set_charge_limit(None);
+        assert_eq!(cfg.charge_limit(), None);
+        assert_eq!(cfg.battery_flags, DaemonConfig::default().battery_flags);
+    }
+
+    #[test]
+    fn test_charge_limit_ignores_invalid_nibble() {
+        let mut cfg = DaemonConfig::default();
+        cfg.battery_flags |= 0xF0;
+        assert_eq!(cfg.charge_limit(), None);
     }
 }

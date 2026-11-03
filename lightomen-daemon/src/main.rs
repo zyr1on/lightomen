@@ -1,6 +1,7 @@
 // main.rs: lightomen-daemon entry point
 // Pure std + libc + evdev, zero bloat, <2.5MB RAM footprint.
 
+mod battery;
 mod ec;
 mod fan;
 mod hotkey;
@@ -8,6 +9,7 @@ mod hwmon;
 mod ipc;
 mod profile;
 
+use battery::ChargeLimit;
 use ec::EmbeddedController;
 use fan::FanController;
 use hotkey::HotkeyMonitor;
@@ -40,6 +42,7 @@ fn main() {
     // 2. Initialize hardware backends
     let ec = EmbeddedController::new();
     let mut hwmon = HwmonBackend::new();
+    let mut charge_limit = ChargeLimit::new();
 
     let initial_status = DaemonStatus {
         telemetry: Telemetry {
@@ -56,7 +59,8 @@ fn main() {
         on_battery: 0,
         last_learned_key: config.hotkey_code,
         battery_pct: 100,
-        _pad1: [0; 3],
+        charge_limit_supported: charge_limit.is_supported() as u8,
+        _pad1: [0; 2],
     };
 
     let status = Arc::new(Mutex::new(initial_status));
@@ -170,6 +174,9 @@ fn main() {
             hwmon.set_cpu_boost(desired_boost);
             last_cpu_boost = Some(desired_boost);
         }
+
+        // Battery charge limit (no-op if unsupported or unchanged)
+        charge_limit.apply(current_cfg.charge_limit());
 
         // Telemetry: CPU Temp (Hwmon primary, EC 0x57 fallback)
         let raw_cpu_temp = hwmon
