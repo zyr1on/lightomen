@@ -11,7 +11,7 @@ mod profile;
 use ec::EmbeddedController;
 use fan::FanController;
 use hotkey::HotkeyMonitor;
-use hwmon::HwmonBackend;
+use hwmon::{HwmonBackend, SensorTracker, FAILSAFE_TEMP, SENSOR_STALE_AFTER};
 use ipc::IpcServer;
 use profile::ProfileController;
 
@@ -21,7 +21,7 @@ use lightomen_common::{
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 static RUNNING: AtomicBool = AtomicBool::new(true);
 
@@ -77,8 +77,9 @@ fn main() {
     let mut last_applied_refresh_hz: Option<u32> = None;
 
     // Previous valid readings
-    let mut prev_cpu_temp: u16 = 45;
-    let mut prev_gpu_temp: u16 = 40;
+    let mut prev_cpu_temp: u16 = 0;
+    let mut cpu_sensor = SensorTracker::new("CPU temperature");
+    let mut gpu_sensor = SensorTracker::new("GPU temperature");
     let mut prev_fan1_rpm: u16 = 0;
     let mut prev_fan2_rpm: u16 = 0;
 
@@ -172,21 +173,20 @@ fn main() {
         }
 
         // Telemetry: CPU Temp (Hwmon primary, EC 0x57 fallback)
-        let raw_cpu_temp = hwmon
-            .read_cpu_temp()
-            .or_else(|| ec.read_cpu_temp())
-            .unwrap_or(prev_cpu_temp)
-            .max(25);
-
-        // Smooth momentary AMD Ryzen Precision Boost spikes (EMA filter: 2/3 weight on prev, 1/3 on new)
-        let cpu_temp = if prev_cpu_temp > 0 {
-            if raw_cpu_temp >= 85 {
-                raw_cpu_temp
-            } else {
-                ((prev_cpu_temp as u32 * 2 + raw_cpu_temp as u32 + 1) / 3) as u16
+        let now = Instant::now();
+        let cpu_reading = hwmon.read_cpu_temp().or_else(|| ec.read_cpu_temp());
+        let cpu_temp = match cpu_sensor.update(cpu_reading, now, SENSOR_STALE_AFTER) {
+            Some(raw) => {
+                let raw_cpu_temp = raw.max(25);
+                // Smooth momentary AMD Ryzen Precision Boost spikes (EMA filter: 2/3 weight on prev, 1/3 on new)
+                if prev_cpu_temp > 0 && raw_cpu_temp < 85 {
+                    ((prev_cpu_temp as u32 * 2 + raw_cpu_temp as u32 + 1) / 3) as u16
+                } else {
+                    raw_cpu_temp
+                }
             }
-        } else {
-            raw_cpu_temp
+            // No usable reading: report 0 instead of a made-up value
+            None => 0,
         };
         prev_cpu_temp = cpu_temp;
 
@@ -197,7 +197,9 @@ fn main() {
         let (gpu_temp, gpu_power_mw) = if is_gpu_suspended {
             (0u16, 0u32)
         } else {
-            let t = ec.read_gpu_temp().unwrap_or(prev_gpu_temp).max(25);
+            let t = gpu_sensor
+                .update(ec.read_gpu_temp(), now, SENSOR_STALE_AFTER)
+                .map_or(0, |t| t.max(25));
             let pwr = match current_cfg.power_profile {
                 0 => 10000,
                 1 => 35000,
@@ -205,7 +207,6 @@ fn main() {
             };
             (t, pwr)
         };
-        prev_gpu_temp = gpu_temp;
 
         // Telemetry: Fan RPMs (Hwmon fan1_input/fan2_input primary, EC fallback)
         let (hw_f1, hw_f2) = hwmon.read_fans();
@@ -227,8 +228,8 @@ fn main() {
             current_cfg.fan_mode,
             &current_cfg.cpu_curve,
             &current_cfg.gpu_curve,
-            cpu_temp,
-            gpu_temp,
+            if cpu_sensor.is_failing() { FAILSAFE_TEMP } else { cpu_temp },
+            if !is_gpu_suspended && gpu_sensor.is_failing() { FAILSAFE_TEMP } else { gpu_temp },
             current_cfg.gpu_zero_rpm,
             on_battery,
         );

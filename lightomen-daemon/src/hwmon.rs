@@ -4,7 +4,7 @@
 use std::fs::{self, File};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::PathBuf;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 pub struct HwmonBackend {
     cpu_temp_file: Option<File>,
@@ -574,6 +574,63 @@ struct DiscoveredPaths {
     max_rpm: Option<u16>,
 }
 
+/// How long a last-good sensor value may be reused before it counts as stale.
+pub const SENSOR_STALE_AFTER: Duration = Duration::from_secs(10);
+
+/// Temperature handed to the fan logic when a sensor has no usable reading.
+/// High enough to push the curve toward cooling, below the emergency-max threshold.
+pub const FAILSAFE_TEMP: u16 = 85;
+
+/// Tracks the last successful read of one sensor so stale values are not reused forever.
+pub struct SensorTracker {
+    name: &'static str,
+    last_value: Option<u16>,
+    last_ok: Option<Instant>,
+    failing: bool,
+}
+
+impl SensorTracker {
+    pub const fn new(name: &'static str) -> Self {
+        Self { name, last_value: None, last_ok: None, failing: false }
+    }
+
+    /// Feed a fresh reading. Returns the value to use: the new reading, the last good
+    /// value while it is younger than `stale_after`, or `None` once it is stale.
+    /// Logs a single warning when the sensor starts failing and a note when it recovers.
+    pub fn update(&mut self, reading: Option<u16>, now: Instant, stale_after: Duration) -> Option<u16> {
+        if let Some(v) = reading {
+            if self.failing {
+                eprintln!("lightomen-daemon: {} sensor recovered ({})", self.name, v);
+                self.failing = false;
+            }
+            self.last_value = Some(v);
+            self.last_ok = Some(now);
+            return Some(v);
+        }
+
+        let fresh = self
+            .last_ok
+            .is_some_and(|t| now.saturating_duration_since(t) < stale_after);
+        if fresh {
+            return self.last_value;
+        }
+
+        if !self.failing {
+            eprintln!(
+                "lightomen-daemon: {} sensor read failed for over {}s, using failsafe",
+                self.name,
+                stale_after.as_secs()
+            );
+            self.failing = true;
+        }
+        None
+    }
+
+    pub fn is_failing(&self) -> bool {
+        self.failing
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -591,5 +648,43 @@ mod tests {
         let p = DiscoveredPaths::default();
         assert!(p.cpu_temp.is_none());
         assert!(p.fan1_target.is_none());
+    }
+
+    #[test]
+    fn sensor_tracker_returns_fresh_reading() {
+        let mut t = SensorTracker::new("cpu");
+        let now = Instant::now();
+        assert_eq!(t.update(Some(60), now, SENSOR_STALE_AFTER), Some(60));
+        assert!(!t.is_failing());
+    }
+
+    #[test]
+    fn sensor_tracker_reuses_value_until_stale() {
+        let mut t = SensorTracker::new("cpu");
+        let start = Instant::now();
+        let stale = Duration::from_secs(10);
+        t.update(Some(70), start, stale);
+        assert_eq!(t.update(None, start + Duration::from_secs(9), stale), Some(70));
+        assert!(!t.is_failing());
+        assert_eq!(t.update(None, start + Duration::from_secs(10), stale), None);
+        assert!(t.is_failing());
+        assert_eq!(t.update(None, start + Duration::from_secs(30), stale), None);
+    }
+
+    #[test]
+    fn sensor_tracker_never_read_is_stale() {
+        let mut t = SensorTracker::new("gpu");
+        assert_eq!(t.update(None, Instant::now(), SENSOR_STALE_AFTER), None);
+        assert!(t.is_failing());
+    }
+
+    #[test]
+    fn sensor_tracker_recovers() {
+        let mut t = SensorTracker::new("gpu");
+        let start = Instant::now();
+        t.update(None, start, SENSOR_STALE_AFTER);
+        assert!(t.is_failing());
+        assert_eq!(t.update(Some(55), start + Duration::from_secs(1), SENSOR_STALE_AFTER), Some(55));
+        assert!(!t.is_failing());
     }
 }

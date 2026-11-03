@@ -42,6 +42,8 @@ impl FanController {
         if pct == 0 {
             0
         } else {
+            // A bogus max below the spin floor would make clamp() panic; never go under the floor
+            let max_rpm = max_rpm.max(1100);
             let rpm = (pct as u32 * max_rpm as u32 / 100) as u16;
             // Floor of functional spinning speed is 1100 RPM on HP Victus (8BD4) and OMEN
             rpm.clamp(1100, max_rpm)
@@ -132,6 +134,13 @@ mod tests {
         assert_eq!(FanController::evaluate_curve(&curve, 30), 20);
         assert_eq!(FanController::evaluate_curve(&curve, 90), 100);
         assert_eq!(FanController::evaluate_curve(&curve, 95), 100);
+    }
+
+    #[test]
+    fn test_pct_to_rpm_bad_max_does_not_panic() {
+        assert_eq!(FanController::pct_to_rpm(50, 0), 1100);
+        assert_eq!(FanController::pct_to_rpm(100, 900), 1100);
+        assert_eq!(FanController::pct_to_rpm(0, 0), 0);
     }
 
     #[test]
