@@ -11,6 +11,8 @@ Pure, idiomatic Rust with zero runtime bloat — no Tokio, no Serde, pure standa
 
 ## ⚠️ Important Prerequisites (EC & ACPI Setup)
 
+The installer pulls in `dkms`, a C toolchain, kernel headers for the running kernel and the GUI build libraries automatically via `apt`, `pacman`, `dnf` or `zypper` (Debian/Ubuntu, Arch, Fedora, openSUSE). On other distros install those manually first. No udev rule is needed for the OMEN key: the daemon runs as root and reads `/dev/input` directly.
+
 To allow the Linux kernel to access and monitor Embedded Controller (EC) registers without ACPI resource conflicts, configure the following once before running the installer:
 
 ### 1. Enable Lax ACPI Resource Enforcement (GRUB)

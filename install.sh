@@ -142,32 +142,18 @@ fi
 
 # 4. Install Kernel & Build Dependencies
 echo -e "\n[4/8] Installing Kernel & System Dependencies via Package Manager..."
-if command -v apt-get &>/dev/null; then
-    echo "  • Updating package lists (apt-get update)..."
-    apt-get update -qq || true
-    KERNEL_HEADERS="linux-headers-$(uname -r)"
-    echo "  • Installing dkms, kernel headers, and runtime/build libraries..."
-    apt-get install -y -qq \
-        dkms \
-        build-essential \
-        libudev-dev \
-        libfontconfig1-dev \
-        libx11-dev \
-        libdbus-1-dev \
-        libxkbcommon-dev \
-        libx11-6 \
-        libdbus-1-3 \
-        libudev1 \
-        "$KERNEL_HEADERS" 2>/dev/null || apt-get install -y -qq dkms build-essential libudev-dev libfontconfig1-dev libx11-dev libdbus-1-dev linux-headers-generic 2>/dev/null || true
-    echo "  [OK] Apt dependencies verified."
-elif command -v pacman &>/dev/null; then
-    echo "  • Installing dependencies via pacman..."
-    pacman -Sy --noconfirm --needed dkms base-devel linux-headers dbus fontconfig libx11 libxkbcommon
-    echo "  [OK] Pacman dependencies verified."
-elif command -v dnf &>/dev/null; then
-    echo "  • Installing dependencies via dnf..."
-    dnf install -y -q dkms kernel-devel kernel-headers dbus-devel systemd-devel gcc make fontconfig-devel libX11-devel libxkbcommon-devel
-    echo "  [OK] Dnf dependencies verified."
+# shellcheck source=scripts/pkg-deps.sh
+. "$SCRIPT_DIR/scripts/pkg-deps.sh"
+if PKG_MANAGER="$(detect_pkg_manager)"; then
+    echo "  • Installing dkms, kernel headers, and build libraries via $PKG_MANAGER..."
+    if install_build_deps "$PKG_MANAGER"; then
+        echo "  [OK] $PKG_MANAGER dependencies verified."
+    else
+        echo "  [WARNING] Some packages failed to install via $PKG_MANAGER; DKMS build may fail."
+    fi
+else
+    echo "  [WARNING] No supported package manager (apt, pacman, dnf, zypper) found."
+    echo "            Install dkms, gcc/make and headers for kernel $(uname -r) manually."
 fi
 
 # 5. Adapt & Install hp-wmi & hp-omen-extra DKMS Drivers
