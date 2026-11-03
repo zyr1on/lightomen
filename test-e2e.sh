@@ -238,14 +238,14 @@ if [ -n "$RUNNING_GUIS" ]; then
     pkill -9 -x ohman-gui 2>/dev/null || true
 fi
 
-MEM_KB=$((ps -C lightomen-gui -C ohman-gui -o rss= 2>/dev/null || true) | awk '{s+=$1} END {print s+0}')
+MEM_KB=$( (ps -C lightomen-gui -C ohman-gui -o rss= 2>/dev/null || true) | awk '{s+=$1} END {print s+0}')
 echo "  -> GUI Closed: Running instances = 0"
 echo "  -> GUI Closed: Resident Memory   = ${MEM_KB} KB (Strictly 0 MB in background)"
 
 test "$MEM_KB" -eq 0 || { echo "Background memory leak detected!"; exit 1; }
 
 # Also verify daemon memory is < 2MB
-DAEMON_RSS_KB=$((ps -C lightomen-daemo -C lightomen-daemon -C ohman-daemon -o rss= 2>/dev/null || true) | awk '{s+=$1} END {print s+0}')
+DAEMON_RSS_KB=$( (ps -C lightomen-daemo -C lightomen-daemon -C ohman-daemon -o rss= 2>/dev/null || true) | awk '{s+=$1} END {print s+0}')
 echo "  -> Daemon Resident Memory: ${DAEMON_RSS_KB} KB (< 2048 KB required)"
 test "$DAEMON_RSS_KB" -lt 2500 || { echo "Daemon memory bloat detected!"; exit 1; }
 

@@ -218,3 +218,55 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod curve_tests {
+    use super::FanController;
+    use lightomen_common::{CURVE_TEMPS, DEFAULT_CPU_CURVE, DEFAULT_GPU_CURVE};
+
+    #[test]
+    fn curve_hits_every_control_point() {
+        for curve in [DEFAULT_CPU_CURVE, DEFAULT_GPU_CURVE] {
+            for (i, &t) in CURVE_TEMPS.iter().enumerate() {
+                assert_eq!(FanController::evaluate_curve(&curve, t as u16), curve[i]);
+            }
+        }
+    }
+
+    #[test]
+    fn curve_stays_between_neighbouring_points() {
+        let curve = DEFAULT_CPU_CURVE;
+        for i in 0..6 {
+            let (lo, hi) = (curve[i].min(curve[i + 1]), curve[i].max(curve[i + 1]));
+            for t in CURVE_TEMPS[i]..=CURVE_TEMPS[i + 1] {
+                let pct = FanController::evaluate_curve(&curve, t as u16);
+                assert!(pct >= lo && pct <= hi, "{}C -> {}%", t, pct);
+            }
+        }
+    }
+
+    #[test]
+    fn curve_handles_descending_segment() {
+        let curve = [50, 40, 40, 40, 40, 40, 40];
+        assert_eq!(FanController::evaluate_curve(&curve, 35), 45);
+    }
+
+    #[test]
+    fn flat_zero_curve_stays_off() {
+        let curve = [0; 7];
+        for t in 0..=120 {
+            assert_eq!(FanController::evaluate_curve(&curve, t), 0);
+        }
+        assert_eq!(FanController::pct_to_rpm(0, 5800), 0);
+    }
+
+    #[test]
+    fn pct_to_rpm_is_monotonic() {
+        let mut prev = 0;
+        for pct in 0..=100 {
+            let rpm = FanController::pct_to_rpm(pct, 5800);
+            assert!(rpm >= prev);
+            prev = rpm;
+        }
+    }
+}
