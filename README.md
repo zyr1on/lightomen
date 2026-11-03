@@ -83,6 +83,17 @@ sudo ./uninstall.sh
   systemctl status lightomen-daemon.service
   ```
 
+### Command Line Client
+
+`lightomen-cli` talks to the running daemon without the GUI. It is not installed by `install.sh` yet; build it with `cargo build --release -p lightomen-cli` and copy `target/release/lightomen-cli` to `/usr/local/bin`.
+
+```bash
+lightomen-cli status                 # temperatures, fan RPM, profile
+lightomen-cli profile performance    # eco | balanced | performance
+lightomen-cli fan curve              # print CPU/GPU fan curves
+lightomen-cli --help
+```
+
 ---
 
 ## Testing

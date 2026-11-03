@@ -3,6 +3,7 @@ members = [
     "lightomen-common",
     "lightomen-daemon",
     "lightomen-gui",
+    "lightomen-cli",
 ]
 resolver = "2"
 

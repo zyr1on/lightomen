@@ -1,0 +1,11 @@
+[package]
+name = "lightomen-cli"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "lightomen-cli"
+path = "src/main.rs"
+
+[dependencies]
+lightomen-common = { path = "../lightomen-common" }

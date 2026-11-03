@@ -1287,6 +1287,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "lightomen-cli"
+version = "0.1.0"
+dependencies = [
+ "lightomen-common",
+]
+
+[[package]]
 name = "lightomen-common"
 version = "0.1.0"
 
